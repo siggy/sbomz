@@ -1,8 +1,11 @@
 #!/usr/bin/env sh
 
-set -eux
+set -eu
 
-version=v0.0.6
+version=$(
+  curl -sL "https://api.github.com/repos/siggy/sbomz/releases/latest" \
+    | bin/jq -r .tag_name
+)
 bindir=$( cd "${0%/*}" && pwd )
 targetbin=$( cd "$bindir"/.. && pwd )/target/bin
 bin=$targetbin/sbomz-$version
@@ -33,14 +36,11 @@ if [ ! -f "$bin" ]; then
     exit 126
   fi
 
-  curl="https://github.com/siggy/sbomz/releases/download/$version/sbomz-$version-$os-$arch"
-  tmp=$(mktemp -d -t XXX)
+  download_url="https://github.com/siggy/sbomz/releases/download/$version/sbomz-$version-$os-$arch"
+  tmp=$(mktemp -d)
   mkdir -p "$targetbin"
-  (
-    cd "$tmp"
-    curl -Lsf -o "./sbomz" "$curl"
-    chmod +x "sbomz"
-  )
+  curl -Lsf -o "$tmp/sbomz" "$download_url"
+  chmod +x "$tmp/sbomz"
   mv "$tmp/sbomz" "$bin"
 fi
 
