@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+
+set -eux
+
+version=v0.0.6
+bindir=$( cd "${0%/*}" && pwd )
+targetbin=$( cd "$bindir"/.. && pwd )/target/bin
+bin=$targetbin/sbomz-$version
+os=""
+
+if [ ! -f "$bin" ]; then
+  case $(uname | tr '[:upper:]' '[:lower:]') in
+    darwin*)
+      os=darwin
+      case $(uname -m) in
+        x86_64) arch=amd64 ;;
+        amd64) arch=amd64 ;;
+        arm64) arch=arm64 ;;
+      esac
+      ;;
+    linux*)
+      os=linux
+      case $(uname -m) in
+        x86_64) arch=amd64 ;;
+        amd64) arch=amd64 ;;
+        arm) arch=arm64 ;;
+      esac
+      ;;
+  esac
+
+  if [ -z "$os" ]; then
+    echo "Couldn't find a matching binary"
+    exit 126
+  fi
+
+  curl="https://github.com/siggy/sbomz/releases/download/$version/sbomz-$version-$os-$arch"
+  tmp=$(mktemp -d -t XXX)
+  mkdir -p "$targetbin"
+  (
+    cd "$tmp"
+    curl -Lsf -o "./sbomz" "$curl"
+    chmod +x "sbomz"
+  )
+  mv "$tmp/sbomz" "$bin"
+fi
+
+"$bin" "$@"

@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+
+set -eu
+
+lintversion=2.1.6
+
+cd "$(pwd -P)"
+
+bindir="$( cd "${0%/*}" && pwd )"
+rootdir="$( cd "$bindir"/.. && pwd )"
+targetbin="$rootdir/target/bin"
+
+cd "$rootdir"
+
+exe=
+if [ "$(uname -s)" = Darwin ]; then
+  # Darwin's uname doesn't support the -o flag so we short circuit here.
+  :;
+elif [ "$(uname -o)" = Msys ]; then
+  exe=.exe
+fi
+
+lintbin="$targetbin/golangci-lint-$lintversion$exe"
+
+if [ ! -f "$lintbin" ]; then
+  mkdir -p "$targetbin"
+  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/refs/tags/v"$lintversion"/install.sh | sh -s -- -b "$targetbin" v2.1.6
+  mv "$targetbin"/golangci-lint "$lintbin"
+fi
+
+"$lintbin" run --timeout 10m0s "$@"

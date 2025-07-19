@@ -1,0 +1,9 @@
+output: spdx-json
+exclude:
+- "./.github/**"
+- "./target/**"
+format:
+  pretty: true
+golang:
+   search-local-mod-cache-licenses: true
+   search-remote-licenses: true

@@ -1,0 +1,50 @@
+#!/usr/bin/env sh
+
+set -eu
+
+# keep version in sync with actions.yml
+version=v2.5.2
+bindir=$( cd "${0%/*}" && pwd )
+targetbin=$( cd "$bindir"/.. && pwd )/target/bin
+bin=$targetbin/cosign-$version
+os=""
+arch=""
+exe=
+
+if [ ! -f "$bin" ]; then
+  case $(uname | tr '[:upper:]' '[:lower:]') in
+    darwin*)
+      os=darwin
+      case $(uname -m) in
+        x86_64) arch=amd64 ;;
+        amd64) arch=amd64 ;;
+        arm64) arch=arm64 ;;
+      esac
+      ;;
+    linux*)
+      os=linux
+      case $(uname -m) in
+        x86_64) arch=amd64 ;;
+        amd64) arch=amd64 ;;
+        arm) arch=arm64 ;;
+      esac
+      ;;
+    msys*)
+      os=windows
+      arch=amd64
+      exe=.exe
+      ;;
+  esac
+
+  if [ -z "$os" ]; then
+    echo "Couldn't find a matching binary"
+    exit 126
+  fi
+  mkdir -p "$targetbin"
+  (
+    curl -L --silent --fail -o "$bin" "https://github.com/sigstore/cosign/releases/download/$version/cosign-${os}-${arch}${exe}"
+    chmod +x "$bin"
+  )
+fi
+
+"$bin" "$@"

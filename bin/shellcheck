@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+set -eu
+
+version=v0.7.1
+
+bindir=$( cd "${0%/*}" && pwd )
+targetbin=$( cd "$bindir"/.. && pwd )/target/bin
+bin=$targetbin/.shellcheck-$version
+
+if [ ! -f "$bin" ]; then
+  if [ "$(uname -s)" = Darwin ]; then
+    file=darwin.x86_64.tar.xz
+  elif [ "$(uname -o)" = Msys ]; then
+    # TODO: work on windows
+    file=zip
+  else
+    case $(uname -m) in
+      x86_64) file=linux.x86_64.tar.xz ;;
+      arm) file=linux.aarch64.tar.xz ;;
+    esac
+  fi
+
+  mkdir -p "$targetbin"
+  curl -sLf "https://github.com/koalaman/shellcheck/releases/download/$version/shellcheck-${version?}.$file" | tar -OxJv "shellcheck-${version}/shellcheck" > "$bin"
+  chmod +x "$bin"
+fi
+
+"$bin" "$@"

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# This script validates that sbomz gets and generates the same SBOM as existing
+# tools.
+#
+# Usage:
+#                                        bin/test
+# SBOMZ_IMAGE=ghcr.io/siggy/sbomz:latest bin/test
+
+set -euo pipefail
+
+img=${SBOMZ_IMAGE:-cgr.dev/chainguard/static:latest-glibc}
+
+bindir=$( cd "${0%/*}" && pwd )
+
+jq_clean='del(.creationInfo, .packages[].supplier)'
+
+expected=$(mktemp -t expected.XXX)
+generate=$(mktemp -t generate.XXX)
+get=$(mktemp -t get.XXX)
+
+"$bindir"/cosign download attestation "$img" \
+  --predicate-type https://spdx.dev/Document \
+  | "$bindir"/jq -r .payload \
+  | base64 -d \
+  | "$bindir"/jq ".predicate \
+  | $jq_clean" \
+  > "$expected"
+
+# 'sbomz generate' requires --sort-keys because it renders an spdx.Document in
+# struct order directly to stdout
+go run main.go generate "$img" \
+  | "$bindir"/jq --sort-keys "$jq_clean" \
+  > "$generate"
+
+go run main.go get "$img" \
+  | "$bindir"/jq "$jq_clean" \
+  > "$get"
+
+diff -u "$expected" "$generate"
+diff -u "$expected" "$get"
+
+#
+# success
+#
+
+chars=$(wc -m < "$expected")
+echo "${chars} chars diffed, identical"

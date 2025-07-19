@@ -1,0 +1,496 @@
+name: Actions
+
+on:
+  push:
+    branches:
+    - main
+    tags:
+    - 'v*'
+  pull_request: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  tag:
+    name: Generate tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+    # tags:
+    # v0.1.0
+    # git-abcdefgh
+    - name: Generate tag and patch info
+      id: tag
+      run: |
+        tag=$(CI_FORCE_CLEAN=1 bin/root-tag)
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+    - name: Setup Go
+      uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b
+      with:
+        go-version-file: go.mod
+    - name: Validates that sbomz gets and generates the same SBOM as existing tools.
+      run: |
+        bin/test
+
+  go_unit_tests:
+    name: Go unit tests
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+    - name: Setup Go
+      uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+      with:
+        go-version-file: go.mod
+    - name: Test
+      run: |
+        go test -race -mod=readonly -cover -v ./...
+
+  go_lint:
+    name: Go lint
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+    - name: Setup Go
+      uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+      with:
+        go-version-file: go.mod
+    - name: Cache lint output
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ~/.cache/golangci-lint
+        key: golangci-lint-${{ github.sha }}
+        restore-keys: golangci-lint-
+    - name: Lint
+      run: |
+        bin/lint --timeout 10m0s --verbose
+
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+    - name: Shellcheck
+      run: bin/shellcheck-all
+
+  go_mod_diff:
+    name: go.mod diff
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+    - name: Setup Go
+      uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+      with:
+        go-version-file: go.mod
+    - name: go.mod diff
+      run: |
+        go mod tidy
+        git diff --exit-code .
+
+  build_cli:
+    name: Build CLI
+    needs:
+    - tag
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64, arm]
+        exclude:
+        - goos: darwin
+          goarch: arm
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+    - name: Setup Go
+      uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+      with:
+        go-version-file: go.mod
+
+    - name: Generate CLI name
+      uses: ./.github/actions/cli-name
+      id: cli-name
+      with:
+        goos: ${{ matrix.goos }}
+        goarch: ${{ matrix.goarch }}
+        tag: ${{ needs.tag.outputs.tag }}
+
+    - name: Build CLI
+      run: |
+        GO_LDFLAGS="-X sigs.k8s.io/release-utils/version.gitVersion=sbomz-${{ needs.tag.outputs.tag }}"
+
+        GOOS=${{ matrix.goos }} \
+        GOARCH=${{ matrix.goarch }} \
+          go build -o ./${{ steps.cli-name.outputs.name }} \
+            -ldflags "$GO_LDFLAGS" \
+            ./main.go
+
+    - name: Upload CLI Executable
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ steps.cli-name.outputs.name }}
+        path: ${{ steps.cli-name.outputs.name }}
+        retention-days: 1
+
+  cli_smoke_test:
+    name: CLI smoke
+    needs:
+    - tag
+    - build_cli
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64, arm]
+        include:
+        - goos: linux
+          os: ubuntu-24.04
+        - goos: darwin
+          os: macos-14
+        exclude:
+        # no arm runner available
+        - goarch: arm64
+        - goarch: arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+    - name: Generate CLI name
+      uses: ./.github/actions/cli-name
+      id: cli-name
+      with:
+        goos: ${{ matrix.goos }}
+        goarch: ${{ matrix.goarch }}
+        tag: ${{ needs.tag.outputs.tag }}
+
+    - name: Download CLI
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: ${{ steps.cli-name.outputs.name }}
+
+    - name: Run CLI
+      run: |
+        chmod +x ${{ steps.cli-name.outputs.name }}
+        ./${{ steps.cli-name.outputs.name }} version
+
+  ready_for_merge_jobs:
+    name: Ready for merge jobs
+    needs:
+    - tag
+    - test
+    - go_unit_tests
+    - go_lint
+    - shellcheck
+    - go_mod_diff
+    - build_cli
+    - cli_smoke_test
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Ready for merge jobs
+      run: |
+        echo Ready for merge jobs: ${{ needs.tag.outputs.tag }}
+
+  #
+  # everything below here is for tagged releases and main merges
+  #
+
+  docker_build_and_push:
+    name: Docker build and push
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+    needs:
+    - tag
+    - ready_for_merge_jobs
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2
+
+    - name: Login to GHCR
+      uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build
+      uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+      with:
+        build-args: |
+          SBOMZ_VERSION=${{ needs.tag.outputs.tag }}
+        context: .
+        file: Dockerfile
+        platforms: linux/amd64,linux/arm64,linux/arm/v7
+        push: true
+        tags: ghcr.io/siggy/sbomz:latest,ghcr.io/siggy/sbomz:${{ needs.tag.outputs.tag }}
+        cache-from: type=gha
+        cache-to: type=gha,ignore-error=true
+        outputs: type=registry,name=ghcr.io/siggy/sbomz:${{ needs.tag.outputs.tag }},annotation-index.org.opencontainers.image.source=https://github.com/siggy/sbomz,annotation-index.org.opencontainers.image.description=SBOM generator for multi-platform container image indexes
+
+  sign_platform_images:
+    name: Sign platform images
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+    needs:
+    - tag
+    - docker_build_and_push
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # needed for signing the images with GitHub OIDC Token
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ["linux/amd64", "linux/arm64", "linux/arm/v7"]
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+    - name: Login to GHCR
+      uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb
+      with:
+        # keep version in sync with bin/cosign
+        cosign-release: 'v2.5.2'
+
+    - name: Sign images, generate SBOMs, attest, verify
+      run: |
+        image=ghcr.io/siggy/sbomz:${{ needs.tag.outputs.tag }}
+        digest=$(bin/crane digest $image --platform ${{ matrix.platform }})
+        image_uri_digest=$image@$digest
+
+        cosign sign --yes $image_uri_digest
+        cosign verify \
+          --certificate-identity=https://github.com/siggy/sbomz/.github/workflows/actions.yml@${{ github.ref }} \
+          --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+          $image_uri_digest
+
+        platform=$(echo ${{ matrix.platform }} | tr '/' '-')
+        sbom=sbomz-${{ needs.tag.outputs.tag }}-$platform.spdx.json
+
+        bin/syft scan docker:$image_uri_digest > $sbom
+
+        cosign attest \
+          --predicate $sbom \
+          --type spdxjson \
+          --yes \
+          $image_uri_digest
+
+        # pipe to /dev/null because printing the output appears to hang GitHub Actions
+        cosign verify-attestation \
+          --type spdxjson \
+          --certificate-identity=https://github.com/siggy/sbomz/.github/workflows/actions.yml@${{ github.ref }} \
+          --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+          $image_uri_digest > /dev/null
+
+  sign_index_image:
+    name: Sign index image
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+    needs:
+    - tag
+    - sign_platform_images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # needed for signing the images with GitHub OIDC Token
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+    - name: Login to GHCR
+      uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a
+      with:
+        # keep version in sync with bin/cosign
+        cosign-release: 'v2.5.2'
+
+    - name: Sign image, generate SBOM, attest, verify
+      run: |
+        image=ghcr.io/siggy/sbomz:${{ needs.tag.outputs.tag }}
+        digest=$(bin/crane digest $image)
+        image_uri_digest=$image@$digest
+
+        cosign sign --yes $image_uri_digest
+        cosign verify \
+          --certificate-identity=https://github.com/siggy/sbomz/.github/workflows/actions.yml@${{ github.ref }} \
+          --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+          $image_uri_digest
+
+        sbom=sbomz-${{ needs.tag.outputs.tag }}.spdx.json
+
+        docker run --rm \
+          -v $HOME/.docker:/root/.docker:ro -e DOCKER_CONFIG=/root/.docker \
+          ghcr.io/siggy/sbomz:${{ needs.tag.outputs.tag }} generate $image_uri_digest \
+          > $sbom
+
+        cosign attest \
+          --predicate $sbom \
+          --type spdxjson \
+          --yes \
+          $image_uri_digest
+
+        # pipe to /dev/null because printing the output appears to hang GitHub Actions
+        cosign verify-attestation \
+          --type spdxjson \
+          --certificate-identity=https://github.com/siggy/sbomz/.github/workflows/actions.yml@${{ github.ref }} \
+          --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+          $image_uri_digest > /dev/null
+
+  ready_for_release_jobs:
+    name: Ready for release jobs
+    needs:
+    - tag
+    - sign_index_image
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Ready for release jobs
+      run: |
+        echo Ready for release jobs: ${{ needs.tag.outputs.tag }}
+
+  #
+  # everything below here is for tagged releases
+  #
+
+  create_draft_release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Create Draft Release
+    needs:
+    - tag
+    - ready_for_release_jobs
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8
+      with:
+        tag_name: ${{ needs.tag.outputs.tag }}
+        body: |
+          # sbomz
+          SBOM generator for multi-platform container image indexes.
+        draft: true
+
+  upload_release_assets_cli:
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Upload CLIs
+    needs:
+    - tag
+    - create_draft_release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64, arm]
+        exclude:
+        - goos: darwin
+          goarch: arm
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+    - name: Generate CLI name
+      uses: ./.github/actions/cli-name
+      id: cli-name
+      with:
+        goos: ${{ matrix.goos }}
+        goarch: ${{ matrix.goarch }}
+        tag: ${{ needs.tag.outputs.tag }}
+
+    - name: Download CLI
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: ${{ steps.cli-name.outputs.name }}
+
+    - name: Generate sha256
+      run: |
+        openssl dgst -sha256 "${{ steps.cli-name.outputs.name }}" | awk '{print $2}' > "${{ steps.cli-name.outputs.name }}.sha256"
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create_draft_release.outputs.upload_url }}
+        asset_path: ${{ steps.cli-name.outputs.name }}
+        asset_name: ${{ steps.cli-name.outputs.name }}
+        asset_content_type: application/octet-stream
+
+    - name: Upload Release Asset .sha256
+      uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create_draft_release.outputs.upload_url }}
+        asset_path: ${{ steps.cli-name.outputs.name }}.sha256
+        asset_name: ${{ steps.cli-name.outputs.name }}.sha256
+        asset_content_type: text/plain
+
+  publish_release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+    - tag
+    - upload_release_assets_cli
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+    - name: Publish Release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release edit ${{ needs.tag.outputs.tag }} --draft=false --latest

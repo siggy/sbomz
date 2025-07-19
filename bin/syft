@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+
+set -eu
+
+version=v1.27.1
+
+cd "$(pwd -P)"
+
+bindir=$( cd "${0%/*}" && pwd )
+rootdir=$( cd "$bindir"/.. && pwd )
+targetbin=$rootdir/target/bin
+
+cd "$rootdir"
+
+bin=$targetbin/syft-$version
+
+if [ ! -f "$bin" ]; then
+  mkdir -p "$targetbin"
+  curl -sSfL https://raw.githubusercontent.com/anchore/syft/$version/install.sh | sh -s -- -b "$targetbin" "$version"
+  mv "$targetbin/syft" "$bin"
+fi
+
+"$bin" "$@"

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+set -eu
+
+bindir=$( cd "${0%/*}" && pwd )
+rootdir=$( cd "$bindir"/.. && pwd )
+
+# For more information on shellcheck failures:
+# https://github.com/koalaman/shellcheck/wiki/Checks
+
+
+shellcheck_directory() {
+  # For more information on shellcheck failures:
+  # https://github.com/koalaman/shellcheck/wiki/Checks
+
+  # We want the word splitting for the shellcheck arguments
+  # shellcheck disable=SC2046
+  "$bindir"/shellcheck -x -P "$1" $(grep -rnsle '^#!/usr/bin/env \(bash\|sh\)' "$1"/* | xargs)
+}
+
+shellcheck_directory "$rootdir"

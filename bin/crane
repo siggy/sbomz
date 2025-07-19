@@ -1,0 +1,52 @@
+#!/usr/bin/env sh
+
+set -eu
+
+version=v0.20.6
+bindir=$( cd "${0%/*}" && pwd )
+targetbin=$( cd "$bindir"/.. && pwd )/target/bin
+bin=$targetbin/crane-$version
+os=""
+arch=""
+
+if [ ! -f "$bin" ]; then
+  case $(uname | tr '[:upper:]' '[:lower:]') in
+    darwin*)
+      os=Darwin
+      case $(uname -m) in
+        x86_64) arch=x86_64 ;;
+        amd64) arch=x86_64 ;;
+        arm64) arch=arm64 ;;
+      esac
+      ;;
+    linux*)
+      os=Linux
+      case $(uname -m) in
+        x86_64) arch=x86_64 ;;
+        amd64) arch=x86_64 ;;
+        arm) arch=arm64 ;;
+      esac
+      ;;
+    msys*)
+      os=Windows
+      arch=x86_64
+      ;;
+  esac
+
+  if [ -z "$os" ]; then
+    echo "Couldn't find a matching binary"
+    exit 126
+  fi
+  curl="https://github.com/google/go-containerregistry/releases/download/${version}/go-containerregistry_${os}_${arch}.tar.gz"
+  tmp=$(mktemp -d -t cr.XXX)
+  mkdir -p "$targetbin"
+  (
+    cd "$tmp"
+    curl -Lsf -o "./crane.tar.gz" "$curl"
+    tar zf "./crane.tar.gz" -x "crane"
+    chmod +x "crane"
+  )
+  mv "$tmp/crane" "$bin"
+fi
+
+"$bin" "$@"

@@ -1,0 +1,34 @@
+name: CLI Name
+description: Generate a CLI filename based on release tag, os, arch, fips
+
+# examples:
+# sbomz-v0.0.1-linux-amd64
+# sbomz-git-abcdefgh-darwin-arm64
+
+inputs:
+  tag:
+    # example: v0.0.1
+    description: The tag of this release
+    required: true
+  goos:
+    # example: linux
+    description: The GOOS build value
+    required: true
+  goarch:
+    # example: amd64
+    description: The GOARCH build value
+    required: true
+
+runs:
+  using: composite
+  steps:
+  - name: Generate CLI name
+    id: generate
+    shell: bash
+    run: |
+      echo "name=sbomz-${{ inputs.tag }}-${{ inputs.goos }}-${{ inputs.goarch }}" >> $GITHUB_OUTPUT
+
+outputs:
+  name:
+    description: The filename of the CLI executable
+    value: ${{ steps.generate.outputs.name }}

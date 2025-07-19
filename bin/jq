@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+
+set -eu
+
+version=1.8.0
+bindir=$( cd "${0%/*}" && pwd )
+targetbin=$( cd "$bindir"/.. && pwd )/target/bin
+bin=$targetbin/jq-$version
+os=""
+
+if [ ! -f "$bin" ]; then
+  case $(uname | tr '[:upper:]' '[:lower:]') in
+    darwin*)
+      os=osx-amd64
+      ;;
+    linux*)
+      os=linux64
+      ;;
+  esac
+
+  if [ -z "$os" ]; then
+    echo "Couldn't find a matching binary"
+    exit 126
+  fi
+  curl="https://github.com/stedolan/jq/releases/download/jq-$version/jq-$os"
+  tmp=$(mktemp -d -t XXX)
+  mkdir -p "$targetbin"
+  (
+    cd "$tmp"
+    curl -Lsf -o "./jq" "$curl"
+    chmod +x "jq"
+  )
+  mv "$tmp/jq" "$bin"
+fi
+
+"$bin" "$@"
